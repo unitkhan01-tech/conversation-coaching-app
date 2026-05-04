@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>대화코칭어플</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="page">
+    <div class="page__inner">
+      <header class="hero">
+        <p class="hero__eyebrow">v0.9 · 관계 목표로 답 골라보기</p>
+        <h1 class="hero__title">대화코칭어플</h1>
+        <p class="hero__lead">
+          착한 답장 대신, 덜 끌려가고 덜 후회할 반응만 골라 보게 해 주는 도구예요. 문장은 그대로 써도 되고, 마음에 안 들면 톤만 가져가도 돼요.
+        </p>
+      </header>
+
+      <div class="workspace">
+        <section class="sheet sheet--input" aria-labelledby="inputs-heading">
+          <div class="sheet__head">
+            <h2 id="inputs-heading" class="sheet__title">대화 정리</h2>
+            <p class="sheet__subtitle">상대 말이랑 지금 기분만 적어도 돼요.</p>
+          </div>
+
+          <div class="field field--scenario">
+            <label class="field__label field__label--muted" for="testScenario">빠르게 불러오기</label>
+            <select id="testScenario" class="field__control field__control--select field__control--ghost" aria-describedby="scenario-help">
+              <option value="manual">직접 입력</option>
+              <option value="complaint_contact">상대가 연락이 많다고 부담을 표현함</option>
+              <option value="crush_continue">호감 탐색 / 부담 없이 이어가기</option>
+              <option value="crush_warm">호감 탐색 / 조금 더 다정하게</option>
+              <option value="tension_unsure">텐션 하락 / 잘 모르겠다</option>
+              <option value="conflict_honest">서운함·갈등 / 차분히 말하기</option>
+              <option value="boundary_clear">선 긋기</option>
+              <option value="relation_ambiguous">관계 애매함</option>
+            </select>
+            <p id="scenario-help" class="field__hint">대표 입력을 채워 줘요. 그대로 쓰거나 고쳐 쓰면 돼요.</p>
+          </div>
+
+          <div class="field">
+            <label class="field__label" for="situation">무슨 일이었는지</label>
+            <textarea
+              id="situation"
+              class="field__control field__control--textarea"
+              rows="4"
+              placeholder="예: 썸 타는데 답이 예전보다 느려졌어"
+              autocomplete="off"
+            ></textarea>
+          </div>
+
+          <div class="field">
+            <label class="field__label" for="otherMessage">상대가 보낸 말</label>
+            <textarea
+              id="otherMessage"
+              class="field__control field__control--textarea"
+              rows="3"
+              placeholder="예: 요즘 좀 바빠서 답이 늦었어"
+              autocomplete="off"
+            ></textarea>
+          </div>
+
+          <div class="field">
+            <label class="field__label" for="userIntent">지금 관계에서 내가 원하는 쪽</label>
+            <select id="userIntent" class="field__control field__control--select">
+              <option value="light_continue">대화를 가볍게 이어가고 싶다</option>
+              <option value="not_clingy">내가 너무 매달려 보이고 싶지 않다</option>
+              <option value="want_clarity">상대가 좀 더 명확하게 반응했으면 좋겠다</option>
+              <option value="honest_not_fight">서운함은 보이되 싸우고 싶지는 않다</option>
+              <option value="want_boundary">선을 긋고 싶다</option>
+              <option value="unsure">잘 모르겠다</option>
+            </select>
+          </div>
+
+          <div class="actions actions--split" role="group" aria-label="입력 도우미">
+            <button type="button" id="btnFillExample" class="btn btn--ghost">예시 넣기</button>
+            <button type="button" id="btnReset" class="btn btn--ghost">비우기</button>
+          </div>
+
+          <button type="button" id="btnSubmit" class="btn btn--primary">반응 골라보기</button>
+        </section>
+
+        <section class="sheet sheet--output" aria-labelledby="results-heading">
+          <div class="sheet__head sheet__head--output">
+            <h2 id="results-heading" class="sheet__title">결과</h2>
+          </div>
+
+          <p id="resultsHint" class="placeholder">
+            적으면 <strong>지금 관계 흐름 → 이번 답장의 목표 → 답장 후보 → 보내기 전 체크</strong> 순으로 나와요.
+          </p>
+          <p id="resultsError" class="alert" hidden></p>
+
+          <div id="resultsContent" class="output" hidden>
+            <div class="output__coaching" aria-label="지금 관계 흐름과 이번 답장 목표">
+              <article class="insight-card">
+                <h3 class="insight-card__label">지금 관계 흐름</h3>
+                <p id="situationBrief" class="insight-card__text"></p>
+              </article>
+              <article class="insight-card">
+                <h3 class="insight-card__label">이번 답장의 목표</h3>
+                <p id="replyGoalLine" class="insight-card__text"></p>
+              </article>
+            </div>
+
+            <section class="output__block" aria-labelledby="rec-title">
+              <h3 id="rec-title" class="output__heading">답장 후보</h3>
+              <div id="recommendations" class="reply-stack"></div>
+            </section>
+
+            <div class="output__actions">
+              <button type="button" id="btnMoreReplies" class="btn btn--secondary" hidden>다른 답장 보기</button>
+            </div>
+
+            <article class="preflight" aria-labelledby="pre-title">
+              <h3 id="pre-title" class="preflight__title">보내기 전 체크</h3>
+              <p id="preSendCheck" class="preflight__text"></p>
+            </article>
+
+            <p class="fineprint" aria-live="polite">
+              정답이 아니라, 보내기 전에 온도만 점검하라고 만든 참고용이에요.
+            </p>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

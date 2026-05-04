@@ -1,0 +1,9 @@
+{
+  "name": "conversation-coaching-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Relationship-goal based conversation coaching MVP",
+  "engines": {
+    "node": "20.x"
+  }
+}
