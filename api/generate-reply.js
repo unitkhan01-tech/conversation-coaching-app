@@ -92,6 +92,92 @@ function sanitizeReplyOption(option) {
   };
 }
 
+const COMPLAINT_ABOUT_USER_INVALID_REPLY_MARKERS = [
+  "바쁜",
+  "웰컴백",
+  "이제 봤",
+  "요즘 바빴",
+  "정신없었",
+  "편하게 생각",
+  "아 그랬구나",
+  "오키 이해",
+  "응응",
+  "그래그래",
+];
+
+const COMPLAINT_ABOUT_USER_SAFE_FALLBACK = {
+  relationship_read: {
+    current_dynamic:
+      "상대가 연락 양이 부담스럽다고 느낀 상황. 여기서 모른 척 넘기면 더 날카로워질 수 있음.",
+  },
+  reply_options: [
+    {
+      goal: "maintain_flow",
+      label: "흐름 유지",
+      message: "아 미안 ㅋㅋ 좀 많았나",
+      intended_effect: "분위기를 크게 키우지 않고 한 번 물러남",
+    },
+    {
+      goal: "regain_leverage",
+      label: "주도권 회복",
+      message: "오키 좀 줄일게",
+      intended_effect: "길게 해명하지 않고 내 페이스로 물러남",
+    },
+    {
+      goal: "set_boundary",
+      label: "선 긋기",
+      message: "줄일게. 근데 말은 좀 좋게 해줘",
+      intended_effect: "연락 양은 조절하되 말투까지 다 받아주지는 않음",
+    },
+  ],
+  before_send_check:
+    "길게 사과하면 더 쫓아가는 느낌이 날 수 있음. 바로 받아치면 싸움이 커질 수 있음.",
+};
+
+function classifyMessageFunction(input) {
+  const text = `${input.situation} ${input.other_message} ${input.user_goal}`;
+
+  if (
+    text.includes("왜 이렇게 많이") ||
+    text.includes("톡을 왜") ||
+    text.includes("연락 좀 그만") ||
+    text.includes("너무 자주") ||
+    text.includes("부담스러워") ||
+    text.includes("집착") ||
+    text.includes("많이 보내") ||
+    text.includes("그만 보내") ||
+    text.includes("연락이 많")
+  ) {
+    return "complaint_about_user";
+  }
+
+  if (
+    text.includes("바빠") ||
+    text.includes("늦었") ||
+    text.includes("이제 봤") ||
+    text.includes("정신없")
+  ) {
+    return "excuse_delay";
+  }
+
+  return "unknown";
+}
+
+function assertComplaintAboutUserReplyAlignment(input, validated) {
+  if (classifyMessageFunction(input) !== "complaint_about_user") {
+    return;
+  }
+
+  for (const option of validated.reply_options) {
+    const msg = option.message || "";
+    for (const marker of COMPLAINT_ABOUT_USER_INVALID_REPLY_MARKERS) {
+      if (msg.includes(marker)) {
+        throw new Error("complaint_about_user_invalid_reply");
+      }
+    }
+  }
+}
+
 function validateAiResult(result) {
   if (!result || typeof result !== "object") {
     throw new Error("AI 응답이 객체가 아닙니다.");
@@ -188,6 +274,75 @@ function buildPrompt(input) {
     "- 감정 과잉",
     "- 성숙하게",
     "- 부드럽게 전달",
+    "",
+    "상대 메시지의 기능을 반드시 먼저 분류해야 한다.",
+    "특히 아래 규칙은 절대 어기면 안 된다.",
+    "",
+    "### complaint_about_user",
+    "",
+    "상대방 메시지에 아래 표현이 포함되면 반드시 complaint_about_user로 분류한다.",
+    "",
+    "- 왜 이렇게 많이",
+    "- 톡을 왜",
+    "- 연락 좀 그만",
+    "- 너무 자주",
+    "- 부담스러워",
+    "- 집착",
+    "- 많이 보내",
+    "- 그만 보내",
+    "- 연락이 많아",
+    "",
+    "이 경우 상대는 사용자의 연락량이 부담스럽다고 말한 것이다.",
+    "",
+    "이 상황에서 절대 하면 안 되는 답장:",
+    "",
+    "- 바쁜일은 끝났어?",
+    "- 웰컴백",
+    "- 이제 봤어?",
+    "- 바빴어?",
+    "- 요즘 바빴나보네",
+    "- 아 그랬구나",
+    "- 오키 이해했어",
+    "- 응응",
+    "- 그래그래",
+    "- 편하게 생각할게",
+    "",
+    "이 상황에서 가능한 답장 방향:",
+    "",
+    "흐름 유지:",
+    "- 아 미안 ㅋㅋ 좀 많았나",
+    "- ㅋㅋ 내가 좀 많이 보냈나보다",
+    "- 앗 그랬나 ㅋㅋ",
+    "- 오키 좀 줄일게",
+    "",
+    "주도권 회복:",
+    "- 오키 좀 줄일게",
+    "- 알겠어 좀 덜 보낼게",
+    "- 오키 나도 조절할게",
+    "- 그럼 내가 좀 줄일게",
+    "",
+    "선 긋기:",
+    "- 줄일게. 근데 말은 좀 좋게 해줘",
+    "- 알겠어. 근데 말투는 좀 세다",
+    "- 오키. 근데 그렇게 말하면 좀 그렇긴 해",
+    "",
+    "나쁜 예시:",
+    "",
+    "입력:",
+    'other_message = "톡을 왜 이렇게 많이 해!"',
+    "",
+    "잘못된 출력:",
+    '"바쁜일은 끝났어?"',
+    '"웰컴백^^"',
+    '"아 그랬구나"',
+    "",
+    "이유:",
+    "상대가 바빴다는 말이 아니라, 사용자의 연락량을 부담스럽다고 말한 상황이기 때문이다.",
+    "",
+    "좋은 출력:",
+    '"아 미안 ㅋㅋ 좀 많았나"',
+    '"오키 좀 줄일게"',
+    '"줄일게. 근데 말은 좀 좋게 해줘"',
     "",
     "좋은 답장 기준:",
     "- 짧다.",
@@ -384,7 +539,22 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    const safeResult = validateAiResult(parsed);
+    let safeResult;
+
+    try {
+      safeResult = validateAiResult(parsed);
+      assertComplaintAboutUserReplyAlignment(validation.value, safeResult);
+    } catch (innerError) {
+      if (innerError && innerError.message === "complaint_about_user_invalid_reply") {
+        return sendJson(res, 200, COMPLAINT_ABOUT_USER_SAFE_FALLBACK);
+      }
+
+      return sendJson(res, 500, {
+        error: "server_error",
+        use_fallback: true,
+        user_message: "지금은 답장 후보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+      });
+    }
 
     return sendJson(res, 200, safeResult);
   } catch (error) {
