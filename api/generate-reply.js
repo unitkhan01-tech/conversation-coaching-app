@@ -96,57 +96,36 @@ function sanitizeReplyOption(option) {
   };
 }
 
-const COMPLAINT_ABOUT_USER_INVALID_REPLY_MARKERS = [
-  "바쁜",
-  "웰컴백",
-  "이제 봤",
-  "요즘 바빴",
-  "정신없었",
-  "편하게 생각",
-  "아 그랬구나",
-  "오키 이해",
-  "응응",
-  "그래그래",
-  "아 미안",
-  "미안 ㅋㅋ",
-  "오키 좀 줄일",
-  "말은 좀 좋게",
-  "궁금해서 보냈",
-  "왤까요",
-  "많았나",
-  "줄일게. 근데",
-  "많이 보냈나보다",
-  "알겠어. 근데 말투",
-];
-
-const COMPLAINT_ABOUT_USER_SAFE_FALLBACK = {
-  relationship_read: {
-    current_dynamic:
-      "상대가 연락 빈도로 사용자를 부담스러운 쪽으로 프레임 짜는 순간. 바로 사과로 굴복하면 포지션이 낮아지고, 뻔한 변명·맞장구는 AI처럼 보일 수 있음.",
-  },
-  reply_options: [
-    {
-      goal: "maintain_flow",
-      label: "프레임 전환",
-      message: "들켰네 ㅋㅋ",
-      intended_effect: "부담 프레임을 진지하게 인정하지 않고 가볍게 비틈",
+function getComplaintReframeResult() {
+  return {
+    relationship_read: {
+      current_dynamic:
+        "상대가 연락량을 부담스럽게 말한 상황. 여기서 바로 사과하고 내려가면 상대가 만든 프레임에 들어갈 수 있음.",
     },
-    {
-      goal: "regain_leverage",
-      label: "매력 유지",
-      message: "그냥 생각나서 보냈지 ㅋㅋ",
-      intended_effect: "매달린 톤 없이 관심은 있다는 인상만 남김",
-    },
-    {
-      goal: "set_boundary",
-      label: "여유 있게 물러나기",
-      message: "오키 그럼 잠깐 조용히 있어볼게 ㅋㅋ",
-      intended_effect: "쫓아가지 않고 내 페이스로 한 발 물러남",
-    },
-  ],
-  before_send_check:
-    "과한 사과는 낮은 포지션이 되기 쉽고, 플러팅만 쌓으면 부담 프레임이 더 커질 수 있음. '왤까요?' 류는 기본 후보로 쓰지 말고 아주 장난이 통하는 관계에서만 변형 가능.",
-};
+    reply_options: [
+      {
+        goal: "reframe",
+        label: "프레임 전환",
+        message: "들켰네 ㅋㅋ",
+        intended_effect: "부담스러운 사람 프레임을 무겁지 않게 비틀어 넘김",
+      },
+      {
+        goal: "keep_attraction",
+        label: "매력 유지",
+        message: "그냥 생각나서 보냈지 ㅋㅋ",
+        intended_effect: "관심은 보이지만 매달리는 느낌은 줄임",
+      },
+      {
+        goal: "relaxed_pullback",
+        label: "여유 있게 물러나기",
+        message: "오케이 접수 ㅋㅋ 잠깐 조용히 있을게",
+        intended_effect: "과하게 사과하지 않고 가볍게 한 발 물러남",
+      },
+    ],
+    before_send_check:
+      "장문으로 해명하면 더 쫓아가는 느낌이 날 수 있음. 너무 세게 받아치면 싸움이 됨.",
+  };
+}
 
 function classifyMessageFunction(input) {
   const text = `${input.situation} ${input.other_message} ${input.user_goal}`;
@@ -177,25 +156,13 @@ function classifyMessageFunction(input) {
   return "unknown";
 }
 
-function assertComplaintAboutUserReplyAlignment(input, validated) {
-  if (classifyMessageFunction(input) !== "complaint_about_user") {
-    return;
-  }
-
-  for (const option of validated.reply_options) {
-    const msg = option.message || "";
-    for (const marker of COMPLAINT_ABOUT_USER_INVALID_REPLY_MARKERS) {
-      if (msg.includes(marker)) {
-        throw new Error("complaint_about_user_invalid_reply");
-      }
-    }
-  }
-}
-
 const GOAL_TO_LABEL = {
-  maintain_flow: "프레임 전환",
-  regain_leverage: "매력 유지",
-  set_boundary: "여유 있게 물러나기",
+  maintain_flow: "흐름 유지",
+  regain_leverage: "주도권 회복",
+  set_boundary: "선 긋기",
+  reframe: "프레임 전환",
+  keep_attraction: "매력 유지",
+  relaxed_pullback: "여유 있게 물러나기",
 };
 
 function validateAiResult(result) {
@@ -276,18 +243,21 @@ function buildPrompt(input) {
     "- 답장 후보 3개는 아래 세 축을 각각 하나씩 담당해야 한다.",
     "- 성숙한 모범답안·상담문·장문 분석체는 금지. 카카오톡에 붙여넣을 짧은 반응만.",
     "",
-    "세 가지 축(구 흐름 유지/주도권/선 긋기 개념은 보조일 뿐, 우선순위는 아래):",
+    "complaint_about_user(연락량 핀잔 등) 입력은 이 API에서 모델 호출 없이 고정 응답으로 처리된다. 아래 규칙은 그 외 입력에 적용된다.",
     "",
-    "1. 프레임 전환 (goal 키: maintain_flow, label: 반드시 \"프레임 전환\")",
-    "   상대가 사용자를 부담스럽게 몰아가는 프레임을 가볍게 비튼다. 진지하게 해명하지 않는다.",
+    "세 가지 축. reply_options 3개는 서로 다른 goal이어야 하며, goal과 label은 아래 허용 짝만 사용한다.",
     "",
-    "2. 매력 유지 (goal 키: regain_leverage, label: 반드시 \"매력 유지\")",
-    "   관심은 있었지만 매달린 건 아니라는 인상을 준다. 과한 플러팅으로 부담 프레임을 키우지 않는다.",
+    "A안(기존 goal 키):",
+    "- maintain_flow + label \"흐름 유지\"",
+    "- regain_leverage + label \"주도권 회복\"",
+    "- set_boundary + label \"선 긋기\"",
     "",
-    "3. 여유 있게 물러나기 (goal 키: set_boundary, label: 반드시 \"여유 있게 물러나기\")",
-    "   과하게 사과하지 않고, 쫓아가지 않고, 내 페이스로 한 발 뺀다.",
+    "B안(reframe 계열 goal 키):",
+    "- reframe + label \"프레임 전환\" (프레임 가볍게 비틈)",
+    "- keep_attraction + label \"매력 유지\" (매달림 없이 관심만)",
+    "- relaxed_pullback + label \"여유 있게 물러나기\" (과한 사과 없이 한 발 물러남)",
     "",
-    "내부 의미 매핑(설명용, JSON goal 키는 위 유지): reframe≈maintain_flow, keep_attraction≈regain_leverage, relaxed_pullback≈set_boundary.",
+    "한 응답 안에서는 A안만 쓰거나 B안만 쓴다. 섞지 않는다.",
     "",
     "윤리적 제한:",
     "- 상대를 일부러 불안하게 만들지 않는다.",
@@ -426,11 +396,25 @@ function getResponseSchema() {
           properties: {
             goal: {
               type: "string",
-              enum: ["maintain_flow", "regain_leverage", "set_boundary"],
+              enum: [
+                "maintain_flow",
+                "regain_leverage",
+                "set_boundary",
+                "reframe",
+                "keep_attraction",
+                "relaxed_pullback",
+              ],
             },
             label: {
               type: "string",
-              enum: ["프레임 전환", "매력 유지", "여유 있게 물러나기"],
+              enum: [
+                "흐름 유지",
+                "주도권 회복",
+                "선 긋기",
+                "프레임 전환",
+                "매력 유지",
+                "여유 있게 물러나기",
+              ],
             },
             message: { type: "string" },
             intended_effect: { type: "string" },
@@ -516,6 +500,10 @@ module.exports = async function handler(req, res) {
     });
   }
 
+  if (classifyMessageFunction(validation.value) === "complaint_about_user") {
+    return sendJson(res, 200, getComplaintReframeResult());
+  }
+
   try {
     const apiResponse = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -583,12 +571,7 @@ module.exports = async function handler(req, res) {
 
     try {
       safeResult = validateAiResult(parsed);
-      assertComplaintAboutUserReplyAlignment(validation.value, safeResult);
     } catch (innerError) {
-      if (innerError && innerError.message === "complaint_about_user_invalid_reply") {
-        return sendJson(res, 200, COMPLAINT_ABOUT_USER_SAFE_FALLBACK);
-      }
-
       return sendJson(res, 500, {
         error: "server_error",
         use_fallback: true,
