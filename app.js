@@ -9,6 +9,7 @@
   var lastSourceAi = false;
   var lastAiInputPayload = null;
   var lastUserIntentNorm = "unsure";
+  var currentMode = "generate";
 
   var USER_GOAL_FOR_API = {
     light_continue: "대화를 가볍게 이어가고 싶다",
@@ -23,12 +24,30 @@
     maintain_flow: "흐름 유지",
     regain_leverage: "주도권 회복",
     set_boundary: "선 긋기",
+    reframe: "프레임 전환",
+    keep_attraction: "매력 유지",
+    relaxed_pullback: "여유 있게 물러나기",
+  };
+
+  var COMPLAINT_VOLUME_LABEL = {
+    maintain_flow: "프레임 전환",
+    regain_leverage: "매력 유지",
+    set_boundary: "여유 있게 물러나기",
+  };
+
+  var COMPLAINT_VOLUME_HINT = {
+    maintain_flow: "부담 프레임을 가볍게 비틈",
+    regain_leverage: "매달림 없이 관심만 비침",
+    set_boundary: "과한 사과 없이 한 발 물러남",
   };
 
   var GOAL_FLOW_HINT = {
     maintain_flow: "분위기를 키우지 않고 여지만 남기는 답장",
     regain_leverage: "내가 더 쫓아가는 느낌을 줄이는 답장",
     set_boundary: "불편한 지점을 짧게 드러내는 답장",
+    reframe: "부담 프레임을 무겁지 않게 비틀어 넘김",
+    keep_attraction: "관심은 보이지만 매달리는 느낌은 줄임",
+    relaxed_pullback: "과하게 사과하지 않고 가볍게 한 발 물러남",
   };
 
   var INTENT_DIRECTION_LINE = {
@@ -201,38 +220,16 @@
 
   var MESSAGE_POOLS = {
     complaint_volume: {
-      maintain_flow: [
-        "너 심심할까봐~",
-        "이 정도가 많아?ㅋ",
-        "답도 좀 많이해~",
-        "아 미안 좀 많았지",
-        "관심 표시지ㅎ",
-        "바쁜일은 끝났어?",
-        "돈까스 잘하는 집있던데?",
-        "나 지금좀바뻐서",
-        "그냥 궁금해서 보냈지 ㅋ",
-      ],
+      maintain_flow: ["들켰네 ㅋㅋ", "아 좀 티났나 ㅋㅋ", "ㅋㅋ 오늘 좀 말 많았네"],
       regain_leverage: [
-        "왤까요?",
-        "뭐하고 있었어?",
-        "톡보니까 반갑네",
-        "휴대폰 고장 아니었네ㅋ",
-        "왜 많이 하니 싫어?",
-        "전화 할 걸 그랬나",
-        "웰컴백^^",
-        "왜 그랬을까?",
-        "답 올 때까지 좀 그랬지",
+        "그냥 생각나서 보냈지 ㅋㅋ",
+        "별건 아니고 그냥 말 걸고 싶었어",
+        "아 그 정도였나 ㅋㅋ",
       ],
       set_boundary: [
-        "그래 그래",
-        "네 시간만이네",
-        "그럼 몇 개 정도까지 할까?",
-        "오우 무안하다야",
-        "너 원래 말 예쁘게 하는게 이쁜데",
-        "내일까지 기다릴걸 그랬나?",
-        "이유는 너도 알잖아",
-        "그래? 많더 그거지?",
-        "답을 했음 안했겠지?",
+        "오케이 접수 ㅋㅋ 잠깐 조용히 있을게",
+        "알겠어 ㅋㅋ 나도 좀 줄일게",
+        "오케이 잠깐 조용히 모드 갈게 ㅋㅋ",
       ],
     },
     late_reply_combined: {
@@ -419,9 +416,9 @@
 
   var FALLBACKS = {
     complaint_volume: {
-      maintain_flow: "아 미안 ㅋㅋ",
-      regain_leverage: "왤까요?",
-      set_boundary: "그래 그래",
+      maintain_flow: "들켰네 ㅋㅋ",
+      regain_leverage: "그냥 생각나서 보냈지 ㅋㅋ",
+      set_boundary: "오케이 접수 ㅋㅋ 잠깐 조용히 있을게",
     },
     late_reply_combined: {
       maintain_flow: "아하 ㅋㅋ",
@@ -768,15 +765,19 @@
     };
   }
 
-  function recommendationsFromDraw(draw) {
+  function recommendationsFromDraw(draw, engineId) {
+    var pk = poolKeyForEngine(engineId || "");
+    var complaintVol = pk === "complaint_volume";
     var out = [];
     for (var i = 0; i < 3; i++) {
       var g = draw.goals[i];
+      var lab = complaintVol ? COMPLAINT_VOLUME_LABEL[g] : DISPLAY_LABEL[g];
+      var hintLine = complaintVol ? COMPLAINT_VOLUME_HINT[g] : GOAL_FLOW_HINT[g];
       out.push({
         type: g,
-        label: DISPLAY_LABEL[g],
+        label: lab,
         message: draw.messages[i],
-        hint: GOAL_FLOW_HINT[g],
+        hint: hintLine || "",
       });
     }
     return out;
@@ -799,7 +800,7 @@
     mergedDrawOpts.userIntent = userIntentNorm;
 
     var draw = drawRecommendationTriple(engineId, other, mergedDrawOpts);
-    var recs = recommendationsFromDraw(draw);
+    var recs = recommendationsFromDraw(draw, engineId);
 
     var situation_brief = filterCoachingLine(pack.situation_brief) || pack.situation_brief;
     var direction = INTENT_DIRECTION_LINE[userIntentNorm] || INTENT_DIRECTION_LINE.unsure;
@@ -882,14 +883,21 @@
 
   async function requestAiReply(input) {
     try {
+      var mode = input.mode === "review" ? "review" : "generate";
+      var reqBody = {
+        mode: mode,
+        situation: input.situation,
+        other_message: input.other_message,
+        user_goal: input.user_goal,
+      };
+      if (mode === "review") {
+        reqBody.candidate_reply = input.candidate_reply;
+      }
+
       var res = await fetch("/api/generate-reply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          situation: input.situation,
-          other_message: input.other_message,
-          user_goal: input.user_goal,
-        }),
+        body: JSON.stringify(reqBody),
       });
       var json;
       try {
@@ -901,13 +909,143 @@
       if (json.use_fallback === true) return null;
       if (!res.ok) return null;
       if (json.error) return null;
-      return normalizeResult("ai", json, input.user_intent_norm);
+
+      if (mode === "review") {
+        var rv = json.review;
+        if (!rv || typeof rv !== "object") return null;
+        var bv = rv.better_versions;
+        if (!Array.isArray(bv) || bv.length !== 3) return null;
+        return { kind: "review", review: rv };
+      }
+
+      var genView = normalizeResult("ai", json, input.user_intent_norm);
+      if (!genView) return null;
+      return { kind: "generate", view: genView };
     } catch (e1) {
       return null;
     }
   }
 
-  function setLoadingVisible(show) {
+  function buildLocalReviewFallback(candidateReply) {
+    var c = cleanAiString(candidateReply);
+    var whyish = /왤까요|왜요|왜\s*\?|왜\?/i.test(c);
+    if (whyish) {
+      return {
+        review: {
+          position: "상대가 만든 프레임에 바로 들어가지는 않는 답장입니다.",
+          attraction_effect:
+            "장난이 통하는 사이면 여유 있어 보일 수 있지만, 관계 온도가 낮으면 비꼬는 말처럼 들릴 수 있어요.",
+          risk: "상대가 이미 예민한 상태라면 싸움으로 번질 수 있습니다.",
+          usable_when: "서로 장난을 주고받는 분위기가 어느 정도 있을 때.",
+          dangerous_when: "상대가 진짜로 불편함을 말하고 있거나, 최근 분위기가 차가울 때.",
+          better_versions: ["들켰나 ㅋㅋ", "아 좀 티났나 ㅋㅋ", "그러게 오늘 좀 말 많았네 ㅋㅋ"],
+        },
+      };
+    }
+    return {
+      review: {
+        position: "한 줄로 끝낸 답장이라 부담은 작을 수 있지만, 상대가 읽는 온도에 따라 뉘앙스가 갈릴 수 있어요.",
+        attraction_effect:
+          "가볍게 넘기고 싶을 땐 괜찮을 수 있고, 진지한 말에는 어울리지 않을 수도 있어요.",
+        risk: "상대가 이미 예민하면 대화가 어긋날 수 있어요.",
+        usable_when: "서로 편하게 말하는 단계일 때.",
+        dangerous_when: "갈등 직후이거나 상대가 진지한 톤일 때.",
+        better_versions: ["아하 ㅋㅋ 알겠어", "오키 그럼", "음 알겠어 ㅋㅋ"],
+      },
+    };
+  }
+
+  function switchOutputPanels(which) {
+    var genPanel = document.getElementById("panelGenerateOutput");
+    var revPanel = document.getElementById("panelReviewOutput");
+    if (!genPanel || !revPanel) return;
+    if (which === "review") {
+      genPanel.hidden = true;
+      revPanel.hidden = false;
+    } else {
+      genPanel.hidden = false;
+      revPanel.hidden = true;
+    }
+  }
+
+  function clearReviewOutputFields() {
+    var ids = ["reviewPosition", "reviewAttraction", "reviewRisk", "reviewUsable", "reviewDangerous"];
+    for (var i = 0; i < ids.length; i++) {
+      var el = document.getElementById(ids[i]);
+      if (el) el.textContent = "";
+    }
+    var vc = document.getElementById("reviewVariants");
+    if (vc) vc.innerHTML = "";
+  }
+
+  function renderReviewOutput(review) {
+    if (!review) return;
+    document.getElementById("reviewPosition").textContent = review.position || "";
+    document.getElementById("reviewAttraction").textContent = review.attraction_effect || "";
+    document.getElementById("reviewRisk").textContent = review.risk || "";
+    document.getElementById("reviewUsable").textContent = review.usable_when || "";
+    document.getElementById("reviewDangerous").textContent = review.dangerous_when || "";
+
+    var container = document.getElementById("reviewVariants");
+    container.innerHTML = "";
+    var list = review.better_versions || [];
+
+    for (var i = 0; i < list.length; i++) {
+      (function (idx, message) {
+        var card = document.createElement("article");
+        card.className = "review-variant-card";
+
+        var badge = document.createElement("span");
+        badge.className = "review-variant-card__index";
+        badge.textContent = String(idx + 1);
+
+        var bubble = document.createElement("p");
+        bubble.className = "review-variant-card__bubble";
+        bubble.textContent = message;
+
+        var foot = document.createElement("div");
+        foot.className = "review-variant-card__foot";
+
+        var copyBtn = document.createElement("button");
+        copyBtn.type = "button";
+        copyBtn.className = "btn btn--copy";
+        copyBtn.textContent = "복사";
+
+        var feedback = document.createElement("p");
+        feedback.className = "reply-card__status";
+        feedback.setAttribute("role", "status");
+        feedback.setAttribute("aria-live", "polite");
+        feedback.hidden = true;
+
+        copyBtn.addEventListener("click", function () {
+          tryCopyText(message)
+            .then(function () {
+              feedback.textContent = "복사됐어요";
+              feedback.className = "reply-card__status";
+              feedback.hidden = false;
+            })
+            .catch(function () {
+              feedback.textContent = "길게 눌러 직접 복사해 주세요";
+              feedback.className = "reply-card__status reply-card__status--muted";
+              feedback.hidden = false;
+            });
+        });
+
+        foot.appendChild(copyBtn);
+        foot.appendChild(feedback);
+
+        card.appendChild(badge);
+        card.appendChild(bubble);
+        card.appendChild(foot);
+
+        container.appendChild(card);
+      })(i, list[i]);
+    }
+
+    switchOutputPanels("review");
+  }
+
+  function setLoadingVisible(show, isReviewMode) {
     var c = document.getElementById("resultsContent");
     if (!c) return;
     var el = document.getElementById("generateLoadingLine");
@@ -918,11 +1056,11 @@
       el.setAttribute("role", "status");
       c.insertBefore(el, c.firstChild);
     }
-    el.textContent = "답장 후보를 불러오는 중…";
+    el.textContent = isReviewMode ? "답장을 검수하는 중…" : "답장 후보를 불러오는 중…";
     el.hidden = !show;
   }
 
-  function setFallbackBannerVisible(show) {
+  function setFallbackBannerVisible(show, isReviewMode) {
     var c = document.getElementById("resultsContent");
     if (!c) return;
     var el = document.getElementById("aiFallbackBanner");
@@ -932,11 +1070,16 @@
       el.className = "fineprint";
       el.style.marginTop = "0.35rem";
       el.style.opacity = "0.82";
-      var fine = c.querySelector(".fineprint");
-      if (fine) c.insertBefore(el, fine);
-      else c.appendChild(el);
+      var fine = document.getElementById("fineprintGenerate");
+      if (fine && fine.parentNode === c) {
+        c.insertBefore(el, fine);
+      } else {
+        c.appendChild(el);
+      }
     }
-    el.textContent = "AI 연결이 아직 준비되지 않아 임시 답장 후보를 보여드렸어요.";
+    el.textContent = isReviewMode
+      ? "AI 연결이 아직 준비되지 않아 참고용 검수 요약을 보여드렸어요."
+      : "AI 연결이 아직 준비되지 않아 임시 답장 후보를 보여드렸어요.";
     el.hidden = !show;
   }
 
@@ -978,6 +1121,9 @@
       maintain_flow: "reply-card--flow",
       regain_leverage: "reply-card--leverage",
       set_boundary: "reply-card--boundary",
+      reframe: "reply-card--flow",
+      keep_attraction: "reply-card--leverage",
+      relaxed_pullback: "reply-card--boundary",
     };
     for (var i = 0; i < list.length; i++) {
       var item = list[i];
@@ -1067,8 +1213,10 @@
     renderCoachingTop("", "");
     renderPreSend("");
     document.getElementById("recommendations").innerHTML = "";
-    setLoadingVisible(false);
-    setFallbackBannerVisible(false);
+    clearReviewOutputFields();
+    switchOutputPanels("generate");
+    setLoadingVisible(false, false);
+    setFallbackBannerVisible(false, false);
   }
 
   function getEls() {
@@ -1076,13 +1224,44 @@
       testScenario: document.getElementById("testScenario"),
       situation: document.getElementById("situation"),
       otherMessage: document.getElementById("otherMessage"),
+      candidateReply: document.getElementById("candidateReply"),
+      fieldCandidateWrap: document.getElementById("fieldCandidateWrap"),
+      fieldScenario: document.querySelector(".field--scenario"),
       userIntent: document.getElementById("userIntent"),
       hint: document.getElementById("resultsHint"),
+      hintReview: document.getElementById("resultsHintReview"),
       err: document.getElementById("resultsError"),
       content: document.getElementById("resultsContent"),
       rec: document.getElementById("recommendations"),
       btnMore: document.getElementById("btnMoreReplies"),
+      btnSubmit: document.getElementById("btnSubmit"),
+      btnModeGenerate: document.getElementById("btnModeGenerate"),
+      btnModeReview: document.getElementById("btnModeReview"),
     };
+  }
+
+  function syncModeUi() {
+    var els = getEls();
+    var isReview = currentMode === "review";
+
+    if (els.btnModeGenerate && els.btnModeReview) {
+      els.btnModeGenerate.classList.toggle("mode-switch__btn--active", !isReview);
+      els.btnModeReview.classList.toggle("mode-switch__btn--active", isReview);
+      els.btnModeGenerate.setAttribute("aria-selected", !isReview ? "true" : "false");
+      els.btnModeReview.setAttribute("aria-selected", isReview ? "true" : "false");
+    }
+
+    if (els.fieldCandidateWrap) els.fieldCandidateWrap.hidden = !isReview;
+    if (els.fieldScenario) els.fieldScenario.hidden = isReview;
+
+    if (els.hint) els.hint.hidden = isReview;
+    if (els.hintReview) els.hintReview.hidden = !isReview;
+
+    if (els.btnSubmit) {
+      els.btnSubmit.textContent = isReview ? "내 답장 검수하기" : "반응 골라보기";
+    }
+
+    if (els.btnMore) els.btnMore.hidden = true;
   }
 
   function applyScenarioFromSelect() {
@@ -1094,6 +1273,7 @@
     els.situation.value = preset.situation;
     els.otherMessage.value = preset.otherMessage;
     els.userIntent.value = preset.intent;
+    if (els.candidateReply) els.candidateReply.value = "";
     els.err.hidden = true;
     els.err.textContent = "";
     els.content.hidden = true;
@@ -1111,6 +1291,7 @@
     els.testScenario.value = "manual";
     els.situation.value = "";
     els.otherMessage.value = "";
+    if (els.candidateReply) els.candidateReply.value = "";
     els.userIntent.value = "light_continue";
     els.err.hidden = true;
     els.err.textContent = "";
@@ -1130,6 +1311,7 @@
     els.situation.value = EXAMPLE_SITUATION;
     els.otherMessage.value = EXAMPLE_OTHER;
     els.userIntent.value = "light_continue";
+    if (els.candidateReply) els.candidateReply.value = "";
     els.err.hidden = true;
     els.err.textContent = "";
     els.content.hidden = true;
@@ -1142,45 +1324,234 @@
     if (els.btnMore) els.btnMore.hidden = true;
   }
 
+  function isComplaintAboutUserInput(input) {
+    var text = `${input.situation || ""} ${input.other_message || ""} ${input.user_goal || ""}`;
+
+    return (
+      text.includes("왜 이렇게 많이") ||
+      text.includes("톡을 왜") ||
+      text.includes("연락 좀 그만") ||
+      text.includes("너무 자주") ||
+      text.includes("부담스러워") ||
+      text.includes("집착") ||
+      text.includes("많이 보내") ||
+      text.includes("그만 보내") ||
+      text.includes("연락이 많")
+    );
+  }
+
+  function getComplaintReframeResult() {
+    return {
+      relationship_read: {
+        current_dynamic:
+          "상대가 연락량을 부담스럽게 말한 상황. 여기서 바로 사과하고 내려가면 상대가 만든 프레임에 들어갈 수 있어요.",
+      },
+      reply_options: [
+        {
+          goal: "reframe",
+          label: "프레임 전환",
+          message: "들켰네 ㅋㅋ",
+          intended_effect: "부담스러운 사람 프레임을 무겁지 않게 비틀어 넘김",
+        },
+        {
+          goal: "keep_attraction",
+          label: "매력 유지",
+          message: "그냥 생각나서 보냈지 ㅋㅋ",
+          intended_effect: "관심은 보이지만 매달리는 느낌은 줄임",
+        },
+        {
+          goal: "relaxed_pullback",
+          label: "여유 있게 물러나기",
+          message: "오케이 접수 ㅋㅋ 잠깐 조용히 있을게",
+          intended_effect: "과하게 사과하지 않고 가볍게 한 발 물러남",
+        },
+      ],
+      before_send_check:
+        "여기서 장문으로 해명하면 더 쫓아가는 느낌이 날 수 있어요. 너무 세게 받아치면 싸움이 됩니다.",
+    };
+  }
+
+  function pickComplaintReframeReplyVariant() {
+    function pick(arr) {
+      return arr[Math.floor(Math.random() * arr.length)];
+    }
+    return {
+      relationship_read: {
+        current_dynamic:
+          "상대가 연락량을 부담스럽게 말한 상황. 여기서 바로 사과하고 내려가면 상대가 만든 프레임에 들어갈 수 있어요.",
+      },
+      reply_options: [
+        {
+          goal: "reframe",
+          label: "프레임 전환",
+          message: pick(["들켰네 ㅋㅋ", "아 좀 티났나 ㅋㅋ", "ㅋㅋ 오늘 좀 말 많았네"]),
+          intended_effect: "부담스러운 사람 프레임을 무겁지 않게 비틀어 넘김",
+        },
+        {
+          goal: "keep_attraction",
+          label: "매력 유지",
+          message: pick([
+            "그냥 생각나서 보냈지 ㅋㅋ",
+            "별건 아니고 그냥 말 걸고 싶었어",
+            "아 그 정도였나 ㅋㅋ",
+          ]),
+          intended_effect: "관심은 보이지만 매달리는 느낌은 줄임",
+        },
+        {
+          goal: "relaxed_pullback",
+          label: "여유 있게 물러나기",
+          message: pick([
+            "오케이 접수 ㅋㅋ 잠깐 조용히 있을게",
+            "알겠어 ㅋㅋ 나도 좀 줄일게",
+            "오케이 잠깐 조용히 모드 갈게 ㅋㅋ",
+          ]),
+          intended_effect: "과하게 사과하지 않고 가볍게 한 발 물러남",
+        },
+      ],
+      before_send_check:
+        "여기서 장문으로 해명하면 더 쫓아가는 느낌이 날 수 있어요. 너무 세게 받아치면 싸움이 됩니다.",
+    };
+  }
+
+  function setMode(nextMode) {
+    currentMode = nextMode === "review" ? "review" : "generate";
+    syncModeUi();
+    var els = getEls();
+    if (els.content && !els.content.hidden) {
+      els.content.hidden = true;
+      clearResultDom();
+    }
+    els.err.hidden = true;
+    els.err.textContent = "";
+    if (currentMode === "generate") {
+      els.hint.hidden = false;
+      if (els.hintReview) els.hintReview.hidden = true;
+    } else {
+      els.hint.hidden = true;
+      if (els.hintReview) els.hintReview.hidden = false;
+    }
+  }
+
   async function handleGenerateResult() {
     var els = getEls();
     var situation = els.situation.value.trim();
     var otherMessage = els.otherMessage.value.trim();
     var userIntent = els.userIntent.value;
     var scenarioId = els.testScenario.value;
+    var candidateRaw = els.candidateReply ? els.candidateReply.value.trim() : "";
 
     els.err.hidden = true;
     els.err.textContent = "";
 
     if (!situation || !otherMessage) {
-      els.hint.hidden = false;
+      if (currentMode === "generate") {
+        els.hint.hidden = false;
+        if (els.hintReview) els.hintReview.hidden = true;
+      } else {
+        els.hint.hidden = true;
+        if (els.hintReview) els.hintReview.hidden = false;
+      }
       els.err.textContent = "상황이랑 상대 말 둘 다 적어 주세요.";
       els.err.hidden = false;
       return;
     }
 
+    if (currentMode === "review" && !candidateRaw) {
+      els.hint.hidden = true;
+      if (els.hintReview) els.hintReview.hidden = false;
+      els.err.textContent = "검수할 답장을 적어 주세요.";
+      els.err.hidden = false;
+      return;
+    }
+
     els.hint.hidden = true;
+    if (els.hintReview) els.hintReview.hidden = true;
+
     lastRenderedMessages = [];
     lastTriple = null;
-    setFallbackBannerVisible(false);
+    setFallbackBannerVisible(false, currentMode === "review");
 
     els.content.hidden = false;
-    setLoadingVisible(true);
+    setLoadingVisible(true, currentMode === "review");
     renderCoachingTop("", "");
     renderPreSend("");
     els.rec.innerHTML = "";
+    clearReviewOutputFields();
+    switchOutputPanels("generate");
 
     var userIntentNorm = normalizeUserIntent(userIntent);
     lastUserIntentNorm = userIntentNorm;
 
+    if (currentMode === "review") {
+      var reviewPayload = {
+        mode: "review",
+        situation: situation,
+        other_message: otherMessage,
+        user_goal: goalTextForApi(userIntent),
+        candidate_reply: candidateRaw,
+        user_intent_norm: userIntentNorm,
+      };
+
+      var reviewRes = await requestAiReply(reviewPayload);
+      var usedFbRev = false;
+      var reviewData = null;
+
+      if (reviewRes && reviewRes.kind === "review" && reviewRes.review) {
+        reviewData = reviewRes.review;
+      } else {
+        usedFbRev = true;
+        reviewData = buildLocalReviewFallback(candidateRaw).review;
+      }
+
+      setLoadingVisible(false, true);
+      renderReviewOutput(reviewData);
+      setFallbackBannerVisible(usedFbRev, true);
+      lastSourceAi = !!(reviewRes && reviewRes.kind === "review") && !usedFbRev;
+      lastAiInputPayload = lastSourceAi ? reviewPayload : null;
+      if (els.btnMore) els.btnMore.hidden = true;
+      els.content.hidden = false;
+      return;
+    }
+
     var aiInput = {
+      mode: "generate",
       situation: situation,
       other_message: otherMessage,
       user_goal: goalTextForApi(userIntent),
       user_intent_norm: userIntentNorm,
     };
 
-    var view = await requestAiReply(aiInput);
+    var complaintInput = {
+      situation: situation,
+      other_message: otherMessage,
+      user_goal: goalTextForApi(userIntent),
+    };
+
+    if (isComplaintAboutUserInput(complaintInput)) {
+      var complaintView = normalizeResult("ai", getComplaintReframeResult(), userIntentNorm);
+      if (complaintView && complaintView.recommendations && complaintView.recommendations.length === 3) {
+        setLoadingVisible(false, false);
+        switchOutputPanels("generate");
+        lastTriple = [
+          complaintView.recommendations[0].message,
+          complaintView.recommendations[1].message,
+          complaintView.recommendations[2].message,
+        ];
+        pushRecentMessages(lastTriple);
+        lastSourceAi = false;
+        lastAiInputPayload = null;
+        renderCoachingTop(complaintView.flowSummary, complaintView.directionLine);
+        renderRecommendations(els.rec, complaintView.recommendations);
+        renderPreSend(complaintView.beforeSend || "");
+        setFallbackBannerVisible(false, false);
+        els.content.hidden = false;
+        if (els.btnMore) els.btnMore.hidden = false;
+        return;
+      }
+    }
+
+    var aiPack = await requestAiReply(aiInput);
+    var view = aiPack && aiPack.kind === "generate" ? aiPack.view : null;
     if (view && (!view.recommendations || view.recommendations.length !== 3)) {
       view = null;
     }
@@ -1197,6 +1568,7 @@
     } else {
       lastSourceAi = true;
       lastAiInputPayload = {
+        mode: "generate",
         situation: situation,
         other_message: otherMessage,
         user_goal: aiInput.user_goal,
@@ -1204,7 +1576,8 @@
       };
     }
 
-    setLoadingVisible(false);
+    setLoadingVisible(false, false);
+    switchOutputPanels("generate");
 
     var triple = [
       view.recommendations[0].message,
@@ -1217,7 +1590,7 @@
     renderCoachingTop(view.flowSummary, view.directionLine);
     renderRecommendations(els.rec, view.recommendations);
     renderPreSend(view.beforeSend || "");
-    setFallbackBannerVisible(usedFallback);
+    setFallbackBannerVisible(usedFallback, false);
 
     els.content.hidden = false;
     if (els.btnMore) els.btnMore.hidden = false;
@@ -1226,6 +1599,8 @@
   async function onMoreReplies() {
     var els = getEls();
     if (els.content.hidden) return;
+    if (currentMode === "review") return;
+
     var situation = els.situation.value.trim();
     var otherMessage = els.otherMessage.value.trim();
     var userIntent = els.userIntent.value;
@@ -1234,14 +1609,39 @@
 
     var userIntentNorm = normalizeUserIntent(userIntent);
     lastUserIntentNorm = userIntentNorm;
-    setLoadingVisible(true);
-    setFallbackBannerVisible(false);
+    setLoadingVisible(true, false);
+    setFallbackBannerVisible(false, false);
+
+    var complaintInputMore = {
+      situation: situation,
+      other_message: otherMessage,
+      user_goal: goalTextForApi(userIntent),
+    };
+    if (isComplaintAboutUserInput(complaintInputMore)) {
+      var complaintMoreView = normalizeResult("ai", pickComplaintReframeReplyVariant(), userIntentNorm);
+      if (complaintMoreView && complaintMoreView.recommendations && complaintMoreView.recommendations.length === 3) {
+        setLoadingVisible(false, false);
+        switchOutputPanels("generate");
+        lastTriple = [
+          complaintMoreView.recommendations[0].message,
+          complaintMoreView.recommendations[1].message,
+          complaintMoreView.recommendations[2].message,
+        ];
+        pushRecentMessages(lastTriple);
+        renderCoachingTop(complaintMoreView.flowSummary, complaintMoreView.directionLine);
+        renderRecommendations(els.rec, complaintMoreView.recommendations);
+        renderPreSend(complaintMoreView.beforeSend || "");
+        setFallbackBannerVisible(false, false);
+        return;
+      }
+    }
 
     var view = null;
     var usedFallback = false;
 
     if (lastSourceAi && lastAiInputPayload) {
-      view = await requestAiReply(lastAiInputPayload);
+      var pack = await requestAiReply(lastAiInputPayload);
+      view = pack && pack.kind === "generate" ? pack.view : null;
       if (view && (!view.recommendations || view.recommendations.length !== 3)) {
         view = null;
       }
@@ -1264,7 +1664,8 @@
       view = normalizeResult("local", dataLoc.coaching_result);
     }
 
-    setLoadingVisible(false);
+    setLoadingVisible(false, false);
+    switchOutputPanels("generate");
 
     var triple = [
       view.recommendations[0].message,
@@ -1277,7 +1678,7 @@
     renderCoachingTop(view.flowSummary, view.directionLine);
     renderRecommendations(els.rec, view.recommendations);
     renderPreSend(view.beforeSend || "");
-    setFallbackBannerVisible(usedFallback);
+    setFallbackBannerVisible(usedFallback, false);
   }
 
   document.getElementById("btnSubmit").addEventListener("click", function () {
@@ -1288,6 +1689,12 @@
   document.getElementById("testScenario").addEventListener("change", applyScenarioFromSelect);
   var moreBtn = document.getElementById("btnMoreReplies");
   if (moreBtn) moreBtn.addEventListener("click", onMoreReplies);
+
+  var btnGen = document.getElementById("btnModeGenerate");
+  var btnRev = document.getElementById("btnModeReview");
+  if (btnGen) btnGen.addEventListener("click", function () { setMode("generate"); });
+  if (btnRev) btnRev.addEventListener("click", function () { setMode("review"); });
+  syncModeUi();
 
   if (typeof window !== "undefined") {
     window.generateCoachingResult = generateCoachingResult;

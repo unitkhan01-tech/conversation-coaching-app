@@ -10,7 +10,7 @@
   <div class="page">
     <div class="page__inner">
       <header class="hero">
-        <p class="hero__eyebrow">v0.9 · 관계 목표로 답 골라보기</p>
+        <p class="hero__eyebrow">v1.1 · 답 후보 · 내 답장 검수</p>
         <h1 class="hero__title">대화코칭어플</h1>
         <p class="hero__lead">
           착한 답장 대신, 덜 끌려가고 덜 후회할 반응만 골라 보게 해 주는 도구예요. 문장은 그대로 써도 되고, 마음에 안 들면 톤만 가져가도 돼요.
@@ -22,6 +22,11 @@
           <div class="sheet__head">
             <h2 id="inputs-heading" class="sheet__title">대화 정리</h2>
             <p class="sheet__subtitle">상대 말이랑 지금 기분만 적어도 돼요.</p>
+          </div>
+
+          <div class="mode-switch" role="tablist" aria-label="기능 모드">
+            <button type="button" id="btnModeGenerate" class="mode-switch__btn mode-switch__btn--active" role="tab" aria-selected="true">답장 후보 받기</button>
+            <button type="button" id="btnModeReview" class="mode-switch__btn" role="tab" aria-selected="false">내 답장 검수하기</button>
           </div>
 
           <div class="field field--scenario">
@@ -61,6 +66,17 @@
             ></textarea>
           </div>
 
+          <div id="fieldCandidateWrap" class="field field--candidate" hidden>
+            <label class="field__label" for="candidateReply">내가 보내려는 답장</label>
+            <textarea
+              id="candidateReply"
+              class="field__control field__control--textarea"
+              rows="2"
+              placeholder="예: 왤까요?&#10;예: 들켰네 ㅋㅋ"
+              autocomplete="off"
+            ></textarea>
+          </div>
+
           <div class="field">
             <label class="field__label" for="userIntent">지금 관계에서 내가 원하는 쪽</label>
             <select id="userIntent" class="field__control field__control--select">
@@ -89,37 +105,76 @@
           <p id="resultsHint" class="placeholder">
             적으면 <strong>지금 관계 흐름 → 이번 답장의 목표 → 답장 후보 → 보내기 전 체크</strong> 순으로 나와요.
           </p>
+          <p id="resultsHintReview" class="placeholder" hidden>
+            적으면 <strong>느낌 · 호감 · 조심할 점 · 맞는 상황 · 위험한 상황 · 더 나은 변형</strong> 순으로 정리해 드려요.
+          </p>
           <p id="resultsError" class="alert" hidden></p>
 
           <div id="resultsContent" class="output" hidden>
-            <div class="output__coaching" aria-label="지금 관계 흐름과 이번 답장 목표">
-              <article class="insight-card">
-                <h3 class="insight-card__label">지금 관계 흐름</h3>
-                <p id="situationBrief" class="insight-card__text"></p>
+            <div id="panelGenerateOutput">
+              <div class="output__coaching" aria-label="지금 관계 흐름과 이번 답장 목표">
+                <article class="insight-card">
+                  <h3 class="insight-card__label">지금 관계 흐름</h3>
+                  <p id="situationBrief" class="insight-card__text"></p>
+                </article>
+                <article class="insight-card">
+                  <h3 class="insight-card__label">이번 답장의 목표</h3>
+                  <p id="replyGoalLine" class="insight-card__text"></p>
+                </article>
+              </div>
+
+              <section class="output__block" aria-labelledby="rec-title">
+                <h3 id="rec-title" class="output__heading">답장 후보</h3>
+                <div id="recommendations" class="reply-stack"></div>
+              </section>
+
+              <div class="output__actions">
+                <button type="button" id="btnMoreReplies" class="btn btn--secondary" hidden>다른 답장 보기</button>
+              </div>
+
+              <article class="preflight" aria-labelledby="pre-title">
+                <h3 id="pre-title" class="preflight__title">보내기 전 체크</h3>
+                <p id="preSendCheck" class="preflight__text"></p>
               </article>
-              <article class="insight-card">
-                <h3 class="insight-card__label">이번 답장의 목표</h3>
-                <p id="replyGoalLine" class="insight-card__text"></p>
-              </article>
+
+              <p id="fineprintGenerate" class="fineprint" aria-live="polite">
+                정답이 아니라, 보내기 전에 온도만 점검하라고 만든 참고용이에요.
+              </p>
             </div>
 
-            <section class="output__block" aria-labelledby="rec-title">
-              <h3 id="rec-title" class="output__heading">답장 후보</h3>
-              <div id="recommendations" class="reply-stack"></div>
-            </section>
+            <div id="panelReviewOutput" class="review-output" hidden>
+              <article class="review-summary-card">
+                <h3 class="review-summary-card__title">이 답장이 만드는 느낌</h3>
+                <p id="reviewPosition" class="review-summary-card__text"></p>
+              </article>
+              <article class="review-summary-card">
+                <h3 class="review-summary-card__title">호감에는 이렇게 작용해요</h3>
+                <p id="reviewAttraction" class="review-summary-card__text"></p>
+              </article>
+              <article class="review-summary-card review-summary-card--warn">
+                <h3 class="review-summary-card__title">조심할 지점</h3>
+                <p id="reviewRisk" class="review-summary-card__text"></p>
+              </article>
+              <div class="review-grid">
+                <article class="review-summary-card review-summary-card--compact">
+                  <h3 class="review-summary-card__title">이런 상황이면 가능</h3>
+                  <p id="reviewUsable" class="review-summary-card__text"></p>
+                </article>
+                <article class="review-summary-card review-summary-card--compact review-summary-card--warn">
+                  <h3 class="review-summary-card__title">이런 상황이면 위험</h3>
+                  <p id="reviewDangerous" class="review-summary-card__text"></p>
+                </article>
+              </div>
 
-            <div class="output__actions">
-              <button type="button" id="btnMoreReplies" class="btn btn--secondary" hidden>다른 답장 보기</button>
+              <section class="review-variants-section" aria-labelledby="review-var-title">
+                <h3 id="review-var-title" class="review-variants-section__heading">더 나은 변형</h3>
+                <div id="reviewVariants" class="review-variant-stack"></div>
+              </section>
+
+              <p id="fineprintReview" class="fineprint" aria-live="polite">
+                참고용이에요. 관계 온도는 본인이 제일 잘 알아요.
+              </p>
             </div>
-
-            <article class="preflight" aria-labelledby="pre-title">
-              <h3 id="pre-title" class="preflight__title">보내기 전 체크</h3>
-              <p id="preSendCheck" class="preflight__text"></p>
-            </article>
-
-            <p class="fineprint" aria-live="polite">
-              정답이 아니라, 보내기 전에 온도만 점검하라고 만든 참고용이에요.
-            </p>
           </div>
         </section>
       </div>
