@@ -1,6 +1,25 @@
 const MAX_SITUATION_LENGTH = 1200;
 const MAX_MESSAGE_LENGTH = 800;
 const MAX_GOAL_LENGTH = 300;
+const MAX_CANDIDATE_REPLY_LENGTH = 600;
+const MAX_REVIEW_FIELD_LENGTH = 420;
+const MAX_REVIEW_VARIANT_LENGTH = 100;
+
+const REVIEW_FORBIDDEN_IN_OUTPUT = [
+  "조종하라",
+  "조종해서",
+  "질투를 불러일으",
+  "일부러 불안하게",
+  "불안하게 만들라",
+  "답장을 일부러 늦추",
+  "상대를 시험하",
+  "깎아내리라",
+  "비하하라",
+  "OPENAI_API_KEY",
+  "sk-proj",
+  "internal_evaluation",
+  "humanlike_score",
+];
 
 const AWKWARD_PHRASES = [
   "편한 때 이어가자",
@@ -39,7 +58,12 @@ function cleanText(value) {
   return value.trim();
 }
 
-function validateInput(body) {
+function parseMode(body) {
+  const m = cleanText(body && body.mode);
+  return m === "review" ? "review" : "generate";
+}
+
+function validateGenerateInput(body) {
   const situation = cleanText(body && body.situation);
   const otherMessage = cleanText(body && body.other_message);
   const userGoal = cleanText(body && body.user_goal);
@@ -77,6 +101,58 @@ function validateInput(body) {
     value: {
       situation,
       other_message: otherMessage,
+      user_goal: userGoal,
+    },
+  };
+}
+
+function validateReviewInput(body) {
+  const situation = cleanText(body && body.situation);
+  const otherMessage = cleanText(body && body.other_message);
+  const candidateReply = cleanText(body && body.candidate_reply);
+  const userGoal = cleanText(body && body.user_goal);
+
+  if (!situation || !otherMessage || !candidateReply || !userGoal) {
+    return {
+      ok: false,
+      message: "상황, 상대방 메시지, 검수할 답장, 관계 목표가 모두 필요합니다.",
+    };
+  }
+
+  if (situation.length > MAX_SITUATION_LENGTH) {
+    return {
+      ok: false,
+      message: "현재 상황 입력이 너무 깁니다.",
+    };
+  }
+
+  if (otherMessage.length > MAX_MESSAGE_LENGTH) {
+    return {
+      ok: false,
+      message: "상대방 메시지 입력이 너무 깁니다.",
+    };
+  }
+
+  if (candidateReply.length > MAX_CANDIDATE_REPLY_LENGTH) {
+    return {
+      ok: false,
+      message: "검수할 답장 입력이 너무 깁니다.",
+    };
+  }
+
+  if (userGoal.length > MAX_GOAL_LENGTH) {
+    return {
+      ok: false,
+      message: "관계 목표 입력이 너무 깁니다.",
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      situation,
+      other_message: otherMessage,
+      candidate_reply: candidateReply,
       user_goal: userGoal,
     },
   };
@@ -230,6 +306,130 @@ function extractOutputText(apiResult) {
   }
 
   return parts.join("\n").trim();
+}
+
+function reviewOutputContainsForbidden(text) {
+  if (!isString(text)) return true;
+  return REVIEW_FORBIDDEN_IN_OUTPUT.some((phrase) => text.includes(phrase));
+}
+
+function validateReviewResult(raw) {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("AI 검수 응답 형식이 올바르지 않습니다.");
+  }
+
+  const rev = raw.review;
+  if (!rev || typeof rev !== "object") {
+    throw new Error("review 객체가 없습니다.");
+  }
+
+  const keys = ["position", "attraction_effect", "risk", "usable_when", "dangerous_when"];
+  const cleaned = {};
+
+  for (const k of keys) {
+    const t = cleanText(rev[k]);
+    if (!t) {
+      throw new Error("검수 필드가 비었습니다.");
+    }
+    if (t.length > MAX_REVIEW_FIELD_LENGTH) {
+      throw new Error("검수 문장이 너무 깁니다.");
+    }
+    if (reviewOutputContainsForbidden(t)) {
+      throw new Error("검수 문장에 허용되지 않은 표현이 포함되었습니다.");
+    }
+    cleaned[k] = t;
+  }
+
+  const bvRaw = rev.better_versions;
+  if (!Array.isArray(bvRaw) || bvRaw.length !== 3) {
+    throw new Error("better_versions는 정확히 3개여야 합니다.");
+  }
+
+  const betterVersions = [];
+  for (const item of bvRaw) {
+    const s = cleanText(item);
+    if (!s || s.length > MAX_REVIEW_VARIANT_LENGTH) {
+      throw new Error("변형 문장이 비었거나 너무 깁니다.");
+    }
+    if (containsAwkwardPhrase(s)) {
+      throw new Error("변형 문장에 부적절한 표현이 있습니다.");
+    }
+    if (reviewOutputContainsForbidden(s)) {
+      throw new Error("변형 문장에 허용되지 않은 표현이 포함되었습니다.");
+    }
+    betterVersions.push(s);
+  }
+
+  return {
+    review: {
+      ...cleaned,
+      better_versions: betterVersions,
+    },
+  };
+}
+
+function buildReviewPrompt(input) {
+  return [
+    "너는 사용자가 보내려는 답장을 관계 전략 관점에서 평가하는 대화 코치다.",
+    "",
+    "목표:",
+    "- 사용자가 낮은 포지션으로 보이지 않게 돕는다.",
+    "- 호감이 떨어지는 문장을 피하게 돕는다.",
+    "- 무조건 착한 답장으로 바꾸지 않는다.",
+    "- 도발, 조종, 비하, 질투 유발, 상대 시험은 권하지 않는다. 답장을 일부러 늦추라고 조언하지 않는다. 상대를 불안하게 만들거나 깎아내리라고 말하지 않는다.",
+    "- 답장이 만드는 포지션, 호감 영향, 위험도, 더 나은 변형을 평가한다.",
+    "",
+    "허용되는 방향:",
+    "- 낮은 포지션으로 보이지 않게 하기",
+    "- 상대 프레임에 바로 들어가지 않기",
+    "- 여유 있는 장난으로 받기",
+    "- 호감과 자기 페이스를 동시에 지키기",
+    "- 더 자연스러운 변형 제안하기",
+    "",
+    "평가와 변형 문장은 카카오톡에 붙여넣을 수 있는 자연스러운 짧은 한국어로 쓴다. 코칭 메모나 장문 분석체는 피한다.",
+    "better_versions는 서로 다른 짧은 대안 문장 3개를 배열로 넣는다.",
+    "",
+    "입력(JSON):",
+    JSON.stringify(input, null, 2),
+    "",
+    "반드시 아래 구조의 JSON만 반환한다:",
+    '{"review":{"position":"","attraction_effect":"","risk":"","usable_when":"","dangerous_when":"","better_versions":["","",""]}}',
+  ].join("\n");
+}
+
+function getReviewResponseSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["review"],
+    properties: {
+      review: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "position",
+          "attraction_effect",
+          "risk",
+          "usable_when",
+          "dangerous_when",
+          "better_versions",
+        ],
+        properties: {
+          position: { type: "string" },
+          attraction_effect: { type: "string" },
+          risk: { type: "string" },
+          usable_when: { type: "string" },
+          dangerous_when: { type: "string" },
+          better_versions: {
+            type: "array",
+            minItems: 3,
+            maxItems: 3,
+            items: { type: "string" },
+          },
+        },
+      },
+    },
+  };
 }
 
 function buildPrompt(input) {
@@ -491,7 +691,101 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  const validation = validateInput(body);
+  const mode = parseMode(body);
+
+  if (mode === "review") {
+    const reviewValidation = validateReviewInput(body);
+
+    if (!reviewValidation.ok) {
+      return sendJson(res, 400, {
+        error: "invalid_input",
+        user_message: reviewValidation.message,
+      });
+    }
+
+    try {
+      const apiResponse = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + apiKey,
+        },
+        body: JSON.stringify({
+          model,
+          input: [
+            {
+              role: "developer",
+              content: [
+                {
+                  type: "input_text",
+                  text: buildReviewPrompt(reviewValidation.value),
+                },
+              ],
+            },
+          ],
+          text: {
+            format: {
+              type: "json_schema",
+              name: "reply_review_result",
+              strict: true,
+              schema: getReviewResponseSchema(),
+            },
+          },
+        }),
+      });
+
+      const apiResult = await apiResponse.json();
+
+      if (!apiResponse.ok) {
+        return sendJson(res, 502, {
+          error: "ai_api_error",
+          use_fallback: true,
+          user_message: "지금은 검수 결과를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+        });
+      }
+
+      const outputText = extractOutputText(apiResult);
+
+      if (!outputText) {
+        return sendJson(res, 502, {
+          error: "empty_ai_response",
+          use_fallback: true,
+          user_message: "지금은 검수 결과를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+        });
+      }
+
+      let parsed;
+
+      try {
+        parsed = JSON.parse(outputText);
+      } catch (error) {
+        return sendJson(res, 502, {
+          error: "invalid_ai_json",
+          use_fallback: true,
+          user_message: "지금은 검수 결과를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+        });
+      }
+
+      try {
+        const safeReview = validateReviewResult(parsed);
+        return sendJson(res, 200, safeReview);
+      } catch (innerError) {
+        return sendJson(res, 500, {
+          error: "server_error",
+          use_fallback: true,
+          user_message: "지금은 검수 결과를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+        });
+      }
+    } catch (error) {
+      return sendJson(res, 500, {
+        error: "server_error",
+        use_fallback: true,
+        user_message: "지금은 검수 결과를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+      });
+    }
+  }
+
+  const validation = validateGenerateInput(body);
 
   if (!validation.ok) {
     return sendJson(res, 400, {
